@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhook Service Demo</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f0f2f5; --text: #12141a; --text-2: #4b5160;
+    --text-3: #727888; --border: #e2e5eb; --accent: #4353ff; --accent-soft: #eceeff; --on-accent: #ffffff;
+    --ok: #12805c; --ok-soft: #e3f5ee; --warn: #b25e09; --warn-soft: #fdf1e3;
+    --err: #c8323a; --err-soft: #fdeced; --shadow: 0 1px 2px rgba(16, 20, 30, .05), 0 4px 16px rgba(16, 20, 30, .04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f14; --surface: #161922; --surface-2: #1e222d; --text: #f2f4f8; --text-2: #b9bfcc;
+      --text-3: #8890a0; --border: #2a2f3c; --accent: #8a96ff; --accent-soft: #23284a; --on-accent: #0d0f14;
+      --ok: #4cd6a0; --ok-soft: #12302a; --warn: #f5b25c; --warn-soft: #33281a;
+      --err: #ff8189; --err-soft: #3a1d22; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .9em; }
+  button { font: inherit; cursor: pointer; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 64px; }
+
+  /* Header */
+  header { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  header h1 { font-size: 24px; letter-spacing: -.02em; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--text-2); }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border); font-weight: 600; font-size: 14px;
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+  .pill.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+  .pill.err .dot { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
+  .link { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 14px; }
+  .link:hover { text-decoration: underline; }
+
+  /* Stats */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .stat .label { color: var(--text-2); font-size: 13px; font-weight: 500; }
+  .stat .value { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .stat .note { color: var(--text-3); font-size: 12px; }
+  .stat .value.good { color: var(--ok); } .stat .value.bad { color: var(--err); }
+
+  /* Layout */
+  .layout { display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); min-width: 0; }
+  .panel-head { padding: 16px 18px 0; }
+  .panel-head h2 { font-size: 16px; margin: 0; }
+  .panel-head p { margin: 2px 0 0; color: var(--text-2); font-size: 13.5px; }
+  .panel-body { padding: 16px 18px 18px; }
+  .divider { height: 1px; background: var(--border); margin: 0 18px; }
+
+  /* Scenarios */
+  .scenario {
+    width: 100%; text-align: left; display: grid; grid-template-columns: 32px 1fr auto; gap: 12px; align-items: center;
+    padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); transition: border-color .15s, background .15s; margin-top: 10px;
+  }
+  .scenario:first-child { margin-top: 0; }
+  .scenario:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+  .scenario:disabled { opacity: .55; cursor: default; }
+  .scenario .num {
+    width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-weight: 700;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .scenario strong { display: block; font-size: 14.5px; }
+  .scenario small { color: var(--text-2); font-size: 13px; }
+  .scenario .go { color: var(--accent); font-weight: 700; font-size: 13px; white-space: nowrap; }
+  .result { margin: 8px 2px 0; font-size: 13px; color: var(--text-2); display: none; }
+  .result.show { display: block; }
+  .result b.ok { color: var(--ok); } .result b.err { color: var(--err); }
+
+  /* Custom webhook form */
+  details.custom summary {
+    cursor: pointer; font-weight: 600; font-size: 14px; list-style: none; display: flex; align-items: center; gap: 8px;
+  }
+  details.custom summary::-webkit-details-marker { display: none; }
+  details.custom summary::before { content: "›"; color: var(--text-3); font-size: 18px; line-height: 1; transition: transform .15s; }
+  details.custom[open] summary::before { transform: rotate(90deg); }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .fields .full { grid-column: 1 / -1; }
+  .field label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
+  .field input {
+    width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); font: 14px ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .with-btn { display: flex; gap: 6px; }
+  .icon-btn {
+    flex: none; width: 38px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text-2); font-size: 16px;
+  }
+  .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .btn {
+    margin-top: 14px; width: 100%; padding: 10px 14px; border-radius: 10px; border: 0;
+    background: var(--accent); color: var(--on-accent); font-weight: 700;
+  }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .form-error { color: var(--err); font-size: 13px; margin-top: 8px; display: none; }
+  .form-error.show { display: block; }
+
+  /* Transactions */
+  .list-head { display: flex; align-items: flex-start; gap: 12px; }
+  .list-head .actions { margin-left: auto; }
+  .ghost { background: none; border: 1px solid var(--border); color: var(--text-2); border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+  .ghost:hover { color: var(--text); border-color: var(--text-3); }
+  .empty { text-align: center; padding: 56px 20px; color: var(--text-2); }
+  .empty .big { font-size: 32px; margin-bottom: 8px; }
+  .txn { border-top: 1px solid var(--border); }
+  .txn:first-child { border-top: 0; }
+  .txn-main { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; padding: 14px 18px; cursor: pointer; }
+  .txn-main:hover { background: var(--surface-2); }
+  .txn-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .txn-id { font-weight: 600; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14px; word-break: break-all; }
+  .txn-meta { color: var(--text-2); font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 2px; }
+  .txn-meta .sep { color: var(--text-3); }
+  .badge {
+    justify-self: end; align-self: start; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  }
+  .badge.processing { background: var(--warn-soft); color: var(--warn); }
+  .badge.processed { background: var(--ok-soft); color: var(--ok); }
+  .badge.failed { background: var(--err-soft); color: var(--err); }
+  .badge.processing::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .progress-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+  .progress { flex: 1; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .progress > div { height: 100%; border-radius: inherit; background: var(--warn); transition: width .9s linear; }
+  .progress.done > div { background: var(--ok); }
+  .progress.failed > div { background: var(--err); }
+  .timing { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 108px; text-align: right; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+  .raw {
+    display: none; margin: 0 18px 14px; padding: 12px; border-radius: 10px; background: var(--surface-2);
+    font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); overflow-x: auto; white-space: pre;
+  }
+  .txn.open .raw { display: block; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 480px) {
+    .fields { grid-template-columns: 1fr; }
+    .stat .value { font-size: 22px; }
+    .head-right { margin-left: 0; }
+    .timing { min-width: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Transaction Webhook Service</h1>
+      <p>Acknowledges payment webhooks instantly with <code>202</code>, then processes each one in the background (~30s).</p>
+    </div>
+    <div class="head-right">
+      <span id="health" class="pill" title="GET /"><span class="dot"></span><span id="healthText">Checking…</span></span>
+      <a class="link" href="/docs" target="_blank" rel="noopener">API docs ↗</a>
+    </div>
+  </header>
+
+  <section class="stats" aria-label="Summary">
+    <div class="stat"><div class="label">Webhooks sent</div><div class="value" id="sSent">0</div><div class="note" id="sSentNote">&nbsp;</div></div>
+    <div class="stat"><div class="label">Duplicates ignored</div><div class="value" id="sDup">0</div><div class="note">same transaction_id resent</div></div>
+    <div class="stat"><div class="label">Slowest API response</div><div class="value" id="sLat">—</div><div class="note">server time · target under 500 ms</div></div>
+    <div class="stat"><div class="label">Processed</div><div class="value" id="sDone">0</div><div class="note" id="sDoneNote">&nbsp;</div></div>
+  </section>
+
+  <div class="layout">
+    <aside class="panel">
+      <div class="panel-head">
+        <h2>Try a scenario</h2>
+        <p>Each one checks a requirement from the brief.</p>
+      </div>
+      <div class="panel-body">
+        <button class="scenario" data-scenario="single">
+          <span class="num">1</span>
+          <span><strong>Single transaction</strong><small>Send one webhook and watch it finish in ~30s</small></span>
+          <span class="go">Run →</span>
+        </button>
+        <div class="result" id="r-single"></div>
+
+        <button class="scenario" data-scenario="duplicate">
+          <span class="num">2</span>
+          <span><strong>Duplicate webhooks</strong><small>Send the same transaction 5× at once; only one gets processed</small></span>
+          <span class="go">Run →</span>
+        </button>
+        <div class="result" id="r-duplicate"></div>
+
+        <button class="scenario" data-scenario="load">
+          <span class="num">3</span>
+          <span><strong>Burst of traffic</strong><small>Send 20 different webhooks at once; all answered quickly</small></span>
+          <span class="go">Run →</span>
+        </button>
+        <div class="result" id="r-load"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="panel-body">
+        <details class="custom">
+          <summary>Send a custom webhook</summary>
+          <form id="form" novalidate>
+            <div class="fields">
+              <div class="field full">
+                <label for="f-id">transaction_id</label>
+                <div class="with-btn">
+                  <input id="f-id" autocomplete="off" spellcheck="false">
+                  <button type="button" class="icon-btn" id="f-newid" title="New random ID" aria-label="New random ID">↻</button>
+                </div>
+              </div>
+              <div class="field"><label for="f-src">source_account</label><input id="f-src" value="acc_user_789" spellcheck="false"></div>
+              <div class="field"><label for="f-dst">destination_account</label><input id="f-dst" value="acc_merchant_456" spellcheck="false"></div>
+              <div class="field"><label for="f-amt">amount</label><input id="f-amt" inputmode="decimal" value="1500"></div>
+              <div class="field"><label for="f-cur">currency</label><input id="f-cur" value="INR" maxlength="3" spellcheck="false"></div>
+            </div>
+            <button class="btn" type="submit">Send webhook</button>
+            <div class="form-error" id="f-err" role="alert"></div>
+          </form>
+        </details>
+      </div>
+    </aside>
+
+    <main class="panel">
+      <div class="panel-head list-head">
+        <div>
+          <h2>Transactions</h2>
+          <p>Live status from <code>GET /v1/transactions/{id}</code>. Click a row to see the raw response.</p>
+        </div>
+        <div class="actions"><button class="ghost" id="clear" hidden>Clear</button></div>
+      </div>
+      <div style="padding: 8px 0 4px">
+        <div id="list"></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+const PROCESSING_SECONDS = 30;
+const $ = (id) => document.getElementById(id);
+const txns = new Map(); // id -> { id, body, sentAt, acks: [{ status, ms, duplicate, error }], data, open }
+let maxLatency = 0;
+
+const randId = () => "txn_" + Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => (b % 36).toString(36)).join("");
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const seconds = (ms) => Math.max(0, Math.round(ms / 1000));
+const fmtMs = (ms) => `<b class="${ms < 500 ? "ok" : "err"}">${ms} ms</b>`;
+
+function money(amount, currency) {
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount); }
+  catch { return `${amount} ${currency}`; }
+}
+
+function makeBody(id = randId()) {
+  return {
+    transaction_id: id, source_account: "acc_user_789", destination_account: "acc_merchant_456",
+    amount: Math.round((100 + Math.random() * 4900) * 100) / 100, currency: "INR",
+  };
+}
+
+function describeError(detail) {
+  if (Array.isArray(detail)) return detail.map((d) => `${d.loc.at(-1)}: ${d.msg}`).join("; ");
+  return detail || "Request failed";
+}
+
+async function sendWebhook(body) {
+  const t0 = performance.now();
+  let ack;
+  try {
+    const r = await fetch("/v1/webhooks/transactions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const roundTrip = Math.round(performance.now() - t0);
+    // Prefer the API's own timing: the round-trip also includes time the request spent
+    // queued in the browser, which allows only ~6 parallel connections per site.
+    const serverMs = parseFloat((r.headers.get("server-timing") || "").match(/dur=([\d.]+)/)?.[1]);
+    const j = await r.json().catch(() => ({}));
+    ack = {
+      status: r.status, ms: Number.isFinite(serverMs) ? Math.round(serverMs) : roundTrip, roundTrip,
+      duplicate: !!j.duplicate, error: r.ok ? null : describeError(j.detail),
+    };
+  } catch {
+    const roundTrip = Math.round(performance.now() - t0);
+    ack = { status: 0, ms: roundTrip, roundTrip, duplicate: false, error: "Network error: service unreachable" };
+  }
+  if (ack.status === 202) maxLatency = Math.max(maxLatency, ack.ms);
+  if (!txns.has(body.transaction_id)) {
+    txns.set(body.transaction_id, { id: body.transaction_id, body, sentAt: Date.now(), acks: [], data: null, open: false });
+  }
+  txns.get(body.transaction_id).acks.push(ack);
+  render();
+  return ack;
+}
+
+let sending = false;
+
+async function busy(fn) {
+  const controls = document.querySelectorAll(".scenario, #form .btn");
+  controls.forEach((b) => (b.disabled = true));
+  sending = true;
+  try { return await fn(); } finally {
+    sending = false;
+    controls.forEach((b) => (b.disabled = false));
+  }
+}
+
+function showResult(key, html) {
+  const el = $("r-" + key);
+  el.innerHTML = html;
+  el.classList.add("show");
+}
+
+const scenarios = {
+  async single() {
+    const a = await sendWebhook(makeBody());
+    showResult("single", a.status === 202
+      ? `Accepted in ${fmtMs(a.ms)}. Watch it move to <b>Processed</b> in the list.`
+      : `<b class="err">Failed:</b> ${esc(a.error)}`);
+  },
+  async duplicate() {
+    const body = makeBody();
+    const acks = await Promise.all(Array.from({ length: 5 }, () => sendWebhook(body)));
+    const accepted = acks.filter((a) => a.status === 202 && !a.duplicate).length;
+    const dups = acks.filter((a) => a.duplicate).length;
+    const slowest = Math.max(...acks.map((a) => a.ms));
+    showResult("duplicate", accepted === 1 && dups === 4
+      ? `<b class="ok">✓ 1 accepted, 4 ignored as duplicates.</b> All 5 calls still got 202 (slowest ${fmtMs(slowest)}).`
+      : `<b class="err">Unexpected:</b> ${accepted} accepted, ${dups} duplicates.`);
+  },
+  async load() {
+    const acks = await Promise.all(Array.from({ length: 20 }, () => sendWebhook(makeBody())));
+    const ok = acks.filter((a) => a.status === 202).length;
+    const ms = acks.map((a) => a.ms).sort((a, b) => a - b);
+    showResult("load", `<b class="${ok === 20 ? "ok" : "err"}">${ok}/20 accepted.</b> Median ${fmtMs(ms[10])}, slowest ${fmtMs(ms.at(-1))}.`);
+  },
+};
+
+document.querySelectorAll(".scenario").forEach((b) => (b.onclick = () => busy(scenarios[b.dataset.scenario])));
+
+$("f-id").value = randId();
+$("f-newid").onclick = () => ($("f-id").value = randId());
+$("form").onsubmit = (e) => {
+  e.preventDefault();
+  busy(async () => {
+    const body = {
+      transaction_id: $("f-id").value.trim(),
+      source_account: $("f-src").value.trim(),
+      destination_account: $("f-dst").value.trim(),
+      amount: Number($("f-amt").value),
+      currency: $("f-cur").value.trim().toUpperCase(),
+    };
+    const a = await sendWebhook(body);
+    const err = $("f-err");
+    err.classList.toggle("show", a.status !== 202);
+    err.textContent = a.status === 202 ? "" : a.error;
+    if (a.status === 202) $("f-id").value = randId(); // keep the ID on failure so it can be corrected
+  });
+};
+
+$("clear").onclick = () => {
+  txns.clear();
+  maxLatency = 0;
+  document.querySelectorAll(".result").forEach((r) => r.classList.remove("show"));
+  render();
+};
+
+$("list").addEventListener("click", (e) => {
+  const row = e.target.closest(".txn-main");
+  if (!row) return;
+  const t = txns.get(row.dataset.id);
+  t.open = !t.open;
+  render();
+});
+$("list").addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.classList.contains("txn-main")) {
+    e.preventDefault();
+    e.target.click();
+  }
+});
+
+async function poll() {
+  if (sending) return; // don't compete with webhooks for the browser's few connections
+  const pending = [...txns.values()].filter((t) => t.data?.status !== "PROCESSED" && t.acks.some((a) => a.status === 202));
+  let changed = false;
+  await Promise.all(pending.map(async (t) => {
+    try {
+      const r = await fetch(`/v1/transactions/${encodeURIComponent(t.id)}`);
+      if (!r.ok) return;
+      const data = (await r.json())[0];
+      if (data.status !== t.data?.status) changed = true;
+      t.data = data;
+    } catch { /* retried on next poll */ }
+  }));
+  if (changed) render();
+}
+
+async function checkHealth() {
+  const pill = $("health");
+  try {
+    const j = await (await fetch("/")).json();
+    pill.className = "pill ok";
+    $("healthText").textContent = j.status === "HEALTHY" ? "Healthy" : j.status;
+    pill.title = `GET / → ${j.status} at ${j.current_time}`;
+  } catch {
+    pill.className = "pill err";
+    $("healthText").textContent = "Unreachable";
+  }
+}
+
+function progressOf(t) {
+  const elapsed = seconds(Date.now() - t.sentAt);
+  return {
+    timing: `${Math.min(elapsed, PROCESSING_SECONDS)}s of ~${PROCESSING_SECONDS}s`,
+    pct: Math.min(97, (elapsed / PROCESSING_SECONDS) * 100),
+  };
+}
+
+// Advance timers and progress bars in place, without rebuilding the list
+function tick() {
+  for (const t of txns.values()) {
+    if (t.data?.status === "PROCESSED" || !t.acks.some((a) => a.status === 202)) continue;
+    const row = $("list").querySelector(`.txn-main[data-id="${CSS.escape(t.id)}"]`);
+    if (!row) continue;
+    const { timing, pct } = progressOf(t);
+    row.querySelector(".progress > div").style.width = `${pct}%`;
+    row.querySelector(".timing").textContent = timing;
+  }
+}
+
+function rowHtml(t) {
+  const accepted = t.acks.find((a) => a.status === 202 && !a.duplicate) || t.acks.find((a) => a.status === 202);
+  const dups = t.acks.filter((a) => a.duplicate).length;
+  const rejected = !accepted;
+  const done = t.data?.status === "PROCESSED";
+
+  let badge, timing, pct, barClass = "";
+  if (rejected) {
+    badge = `<span class="badge failed">REJECTED</span>`;
+    timing = "";
+    pct = 100; barClass = "failed";
+  } else if (done) {
+    badge = `<span class="badge processed">✓ PROCESSED</span>`;
+    timing = `Processed in ${seconds(new Date(t.data.processed_at) - new Date(t.data.created_at))}s`;
+    pct = 100; barClass = "done";
+  } else {
+    badge = `<span class="badge processing">PROCESSING</span>`;
+    ({ timing, pct } = progressOf(t));
+  }
+
+  const ackText = rejected
+    ? `<span style="color:var(--err)">${esc(t.acks.at(-1).error)}</span>`
+    : `<span>Acknowledged in ${accepted.ms} ms</span>`;
+  const dupText = dups ? `<span class="chip">+${dups} duplicate${dups > 1 ? "s" : ""} ignored</span>` : "";
+  const raw = t.data
+    ? `GET /v1/transactions/${t.id}\n\n` + JSON.stringify([t.data], null, 2)
+    : JSON.stringify({ request: t.body, responses: t.acks }, null, 2);
+
+  return `<div class="txn${t.open ? " open" : ""}">
+    <div class="txn-main" data-id="${esc(t.id)}" role="button" tabindex="0" aria-expanded="${t.open}">
+      <div>
+        <div class="txn-id">${esc(t.id)}</div>
+        <div class="txn-meta"><span>${esc(money(t.body.amount, t.body.currency))}</span><span class="sep">·</span>${ackText}${dupText}</div>
+      </div>
+      ${badge}
+      <div class="progress-row">
+        <div class="progress ${barClass}"><div style="width:${pct}%"></div></div>
+        ${timing ? `<span class="timing">${timing}</span>` : ""}
+      </div>
+    </div>
+    <pre class="raw">${esc(raw)}</pre>
+  </div>`;
+}
+
+function render() {
+  const all = [...txns.values()];
+  const acks = all.flatMap((t) => t.acks);
+  const processed = all.filter((t) => t.data?.status === "PROCESSED").length;
+  const inFlight = all.filter((t) => t.acks.some((a) => a.status === 202) && t.data?.status !== "PROCESSED").length;
+
+  $("sSent").textContent = acks.length;
+  $("sSentNote").textContent = acks.length ? `${all.length} unique transaction${all.length === 1 ? "" : "s"}` : " ";
+  $("sDup").textContent = acks.filter((a) => a.duplicate).length;
+  const lat = $("sLat");
+  lat.textContent = maxLatency ? `${maxLatency} ms` : "—";
+  lat.className = "value" + (maxLatency ? (maxLatency < 500 ? " good" : " bad") : "");
+  $("sDone").textContent = processed;
+  $("sDoneNote").textContent = inFlight ? `${inFlight} still processing` : " ";
+  $("clear").hidden = !all.length;
+
+  $("list").innerHTML = all.length
+    ? all.reverse().map(rowHtml).join("")
+    : `<div class="empty"><div class="big">📭</div><div><strong>No transactions yet</strong></div>
+       <div>Run a scenario to send your first webhook.</div></div>`;
+}
+
+render();
+checkHealth();
+setInterval(checkHealth, 15000);
+setInterval(poll, 2000);
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

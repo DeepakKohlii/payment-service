@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.db import dispose, engine, init_db, transactions, with_retry
 from app.ingest import ingest
+from app.keep_awake import keep_awake
 from app.schemas import HealthOut, TransactionOut, TransactionWebhook, WebhookAck, to_iso_z
 from app.worker import worker
 
@@ -25,7 +26,9 @@ async def lifespan(app: FastAPI):
     await ingest.warm_up()
     ingest.start()
     worker.start()
+    keep_awake.start()
     yield
+    await keep_awake.stop()
     await worker.stop()
     await ingest.stop()
     await dispose()

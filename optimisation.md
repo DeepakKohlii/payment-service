@@ -11,6 +11,7 @@ This file records every optimisation made in this project, in the order they wer
 5. [Demo page](#5-demo-page)
 6. [Limits and what's next](#6-limits-and-whats-next)
 7. [Database moved next to the app server](#7-database-moved-next-to-the-app-server)
+8. [No cold starts: keep-awake on Render's free tier](#8-no-cold-starts-keep-awake-on-renders-free-tier)
 
 **Test setup for sections 1–6:** app running on a local machine, Supabase Postgres in Seoul (`ap-northeast-2`), **one database round-trip ≈ 150ms**. Bursts are N concurrent requests sent with `httpx`. Deployed next to the database, every round-trip is shorter, so these numbers are a pessimistic case.
 
@@ -196,6 +197,13 @@ All of this was found by measuring against the real cloud database. On a local P
 
 ---
 
+## 6. Limits and what's next
+
+- **Distance to the database dominates.** Every number above is ~1–2 round-trips of ~150ms. Deploying the API in the region nearest the database is the biggest remaining win.
+- **Capacity is bounded by Supabase's free connection limit (15).** 4 webhook connections × batches of up to 200 rows is ample here. For much higher volume: a larger connection limit (paid tier or direct connection), or a durable buffer such as SQS/Kafka in front of the database.
+- **Pre-ping is off,** so a dead connection costs one failed attempt. It's retried automatically, and if the retry fails too the client gets `503` and the processor retries later, so nothing is lost.
+- **Unexplained one-off:** once, right after the development server auto-reloaded (`--reload`), it reported ~1–1.4s of server time for a couple of bursts. It couldn't be reproduced afterwards on that instance or a fresh one. The likely cause is a brief connection squeeze while the old and new processes overlapped, but it's unconfirmed. It's a development-only scenario.
+
 ## 7. Database moved next to the app server
 **Problem:** Render (where the app runs) has no Seoul region. With the database in Seoul, every round-trip from a Render server would cross between countries, and every webhook costs at least one round-trip.
 **Fix:** a new Supabase project in **Singapore (`ap-southeast-1`)**, and the app deployed on **Render Singapore**, so both sit in the same region. (Supabase can't move an existing project; the app creates its table on first start, so switching was just a new connection string.) The new project was also created with **"Automatically expose new tables" turned off**, so the `transactions` table isn't reachable through Supabase's public Data API.
@@ -209,11 +217,25 @@ All of this was found by measuring against the real cloud database. On a local P
 | Burst of 20 | ~320–370ms | **~170–260ms** |
 | Burst of 50 | ~350–400ms | **~216–232ms** |
 
-From Render Singapore to Supabase Singapore, a round-trip should be a few milliseconds, so production numbers should be lower still. That's to be confirmed against the deployed URL.
+**Confirmed on the live deployment** (Render Singapore + Supabase Singapore), measured from a laptop:
 
-## 6. Limits and what's next
+| Live check (from a laptop, against the deployed URL) | Result |
+|---|---|
+| Single webhook, server time | **~6–9ms** |
+| Single webhook, round-trip from the laptop | ~120ms (mostly internet travel to Singapore) |
+| Burst of 20, server time | max **79ms** |
+| Burst of 50, server time | p50 97ms, max **506ms** (0.1 CPU becomes the limit) |
+| Smoke test: 5 concurrent duplicates | 1 accepted, 4 ignored |
+| Smoke test: single transaction | **PROCESSED after 30s** |
+| ~340 webhooks sent from the demo page | all accepted and processed |
 
-- **Distance to the database dominates.** Every number above is ~1–2 round-trips of ~150ms. Deploying the API in the region nearest the database is the biggest remaining win.
-- **Capacity is bounded by Supabase's free connection limit (15).** 4 webhook connections × batches of up to 200 rows is ample here. For much higher volume: a larger connection limit (paid tier or direct connection), or a durable buffer such as SQS/Kafka in front of the database.
-- **Pre-ping is off,** so a dead connection costs one failed attempt. It's retried automatically, and if the retry fails too the client gets `503` and the processor retries later, so nothing is lost.
-- **Unexplained one-off:** once, right after the development server auto-reloaded (`--reload`), it reported ~1–1.4s of server time for a couple of bursts. It couldn't be reproduced afterwards on that instance or a fresh one. The likely cause is a brief connection squeeze while the old and new processes overlapped, but it's unconfirmed. It's a development-only scenario.
+The database part of a webhook dropped to **~6–9ms**. On the free tier, the remaining limit under large bursts is Render's **0.1 CPU**: a burst of 50 reached 506ms of server time. That's a hosting limit, not a code one; a paid instance with more CPU removes it.
+
+## 8. No cold starts: keep-awake on Render's free tier
+**Problem:** Render spins free web services down after **15 minutes without inbound traffic**. The next request then waits **~1 minute** while the instance boots. A reviewer's first webhook would blow the 500ms budget by two orders of magnitude, and while asleep the background worker isn't running either.
+**Fix:** `app/keep_awake.py`. Render sets `RENDER_EXTERNAL_URL` to the service's public URL. The app sends a `HEAD /` to that URL **every 10 minutes**. The request goes out through Render's proxy, so it counts as inbound traffic and the instance never reaches the 15-minute idle limit.
+- **Off locally:** the variable only exists on Render, so development is unaffected.
+- **Switchable:** set `KEEP_AWAKE=false` to disable it; the interval is `KEEP_AWAKE_INTERVAL_SECONDS`.
+- **Cost to be aware of:** a service that never sleeps runs ~720–744 hours a month. Render's free tier has a monthly instance-hour allowance shared by all free services in the workspace, so with other free services awake as well, the allowance can run out. Turn it off once the service no longer needs to be always-on.
+- **Why not an external pinger** (UptimeRobot, cron-job.org, a GitHub Actions schedule)? Those work too, but need an extra account or have loose timing (GitHub's scheduled workflows can be delayed by many minutes, enough to miss the 15-minute window). The in-app version needs no setup.
+- **Limitation:** it keeps an *awake* instance awake. If Render stops the instance for another reason (e.g. the hour allowance runs out), the pinger stops with it, and the next real request wakes it as usual.

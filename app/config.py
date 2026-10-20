@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     db_pool_size_general: int = 3
     # While idle, ingest connections are touched this often to keep them open and prepared
     ingest_keepalive_seconds: float = 60.0
+    # Render sets this to the service's public URL; used to stay awake on the free tier
+    render_external_url: str | None = None
+    keep_awake: bool = True
+    # Render spins down after 15 min without traffic
+    keep_awake_interval_seconds: float = 600.0
 
 
 settings = Settings()

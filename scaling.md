@@ -14,7 +14,7 @@ The test sizes used elsewhere in this repo (20 in the demo's burst button, 50 in
 ### The setup
 | Component | Current choice | Hard limit that matters |
 |---|---|---|
-| API + worker | **One** Python process (FastAPI/uvicorn), on Render's free tier | **0.1 CPU**, 512MB RAM, sleeps after 15 min idle, can't run multiple instances |
+| API + worker | **One** Python process (FastAPI/uvicorn), on Render's free tier (Singapore) | **0.1 CPU**, 512MB RAM, sleeps after 15 min idle (prevented by keep-awake, see [optimisation.md §8](optimisation.md#8-no-cold-starts-keep-awake-on-renders-free-tier)), can't run multiple instances |
 | Database | Supabase free (Postgres), Singapore (measurements below were taken against the earlier Seoul project) | **15 connections** via the session pooler; 500MB storage |
 | Connections per instance | 4 for webhook writes + 3 for worker and status reads | 7 of the 15 |
 | Worker | Up to **5000** transactions processed at once per instance (`WORKER_CONCURRENCY`) | each takes 30s |
@@ -35,7 +35,7 @@ Measured from a local machine with the test client on the same machine, against 
 - **Correctness held at every size:** every webhook was accepted, with no errors and no duplicates.
 - **The database is not the bottleneck.** Thanks to batched inserts (see [optimisation.md](optimisation.md)), the time spent inside the handler stays ~300–600ms even at 1000 at once.
 - **The bottleneck is CPU in a single Python process.** Above ~100 at once, requests queue *before* the handler runs, while the one process accepts connections and parses HTTP and JSON. Here that topped out at **~160 webhooks/second**, with the test client competing for the same CPU. The `Server-Timing` header doesn't include this queueing, so at this scale the client-side number is the honest one.
-- **On Render's free tier (0.1 CPU), expect roughly a tenth of that.** That's an estimate to verify against the deployed URL.
+- **On Render's free tier (0.1 CPU), measured live:** single webhooks take ~6–9ms of server time and a burst of 20 max 79ms, but a burst of 50 reaches **506ms** of server time. So the comfortable limit on the free tier is roughly **20–40 webhooks at once**. Beyond that, the 0.1 CPU is the bottleneck, not the database.
 
 ### Measured: processing
 - **Originally 100 transactions in parallel per instance**, which turned out to break the "~30 seconds" criterion: with a backlog over 100, a new transaction waited a full extra cycle (~60s). Completions were also one write each, so 200 finishing together were spread over 30–39s. Both are fixed (see [optimisation.md §2.1](optimisation.md#21-worker-limit-and-batched-completions)).
@@ -47,7 +47,7 @@ Measured from a local machine with the test client on the same machine, against 
 
 | | Comfortable | Degrades | Why |
 |---|---|---|---|
-| Webhooks arriving at once | up to ~100 (local); fewer on 0.1 CPU | beyond that, responses slow down (queueing), but **none are lost** | CPU of one process |
+| Webhooks arriving at once | up to ~100 (local); ~20–40 on Render free (0.1 CPU, measured) | beyond that, responses slow down (queueing), but **none are lost** | CPU of one process |
 | Transactions processing in parallel | up to 5000 | more simply wait their turn; processed after 60s, 90s… | `WORKER_CONCURRENCY` |
 | Sustained rate | limited by receiving (~160/s locally, less on 0.1 CPU) | backlog grows; everything is still processed eventually | CPU of one process |
 | Instances | 2 | a 3rd would exceed Supabase's 15 connections | free DB tier |

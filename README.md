@@ -2,11 +2,11 @@
 
 Receives transaction webhooks from payment processors (e.g. Razorpay), acknowledges them immediately with `202 Accepted`, and processes them reliably in the background.
 
-- **Live API:** `<render-url>`
-- **Demo UI:** `<render-url>/demo`
-- **Interactive docs:** `<render-url>/docs`
+- **Live API:** https://payment-service-mqic.onrender.com
+- **Demo UI:** https://payment-service-mqic.onrender.com/demo
+- **Interactive docs:** https://payment-service-mqic.onrender.com/docs
 
-> Hosted on Render's free tier, which sleeps after 15 min idle. The first request may take ~1 min to wake it up; after that responses are fast.
+> Hosted on Render's free tier (Singapore, 0.1 CPU), next to the Supabase database (Singapore). Free instances normally sleep after 15 min idle; the app pings its own public URL every 10 minutes to stay awake (see [app/keep_awake.py](app/keep_awake.py)). If it was asleep anyway, the first request can take ~1 min.
 
 ## Endpoints
 
@@ -78,7 +78,21 @@ The brief requires the webhook to respond within 500ms "regardless of processing
 
 **Test setup:** the app running locally, the Supabase database in Seoul (`ap-northeast-2`), **one round-trip ≈ 150ms**. (The database has since moved to Singapore, next to the Render deployment: ~79ms from a local machine, so the numbers below are pessimistic. See [optimisation.md §7](optimisation.md#7-database-moved-next-to-the-app-server).) Bursts were sent as N concurrent requests with `httpx`. Numbers are end-to-end response times seen by the client. In production, deploy the app in the region closest to the database, which shortens every round-trip.
 
-### Results at a glance
+### Live results (Render Singapore + Supabase Singapore)
+
+| Live check (from a laptop, against the deployed URL) | Result |
+|---|---|
+| Single webhook, server time | **~6–9ms** |
+| Single webhook, round-trip from the laptop | ~120ms (mostly internet travel to Singapore) |
+| Burst of 20, server time | max **79ms** |
+| Burst of 50, server time | p50 97ms, max **506ms** (0.1 CPU becomes the limit) |
+| Smoke test: 5 concurrent duplicates | 1 accepted, 4 ignored |
+| Smoke test: single transaction | **PROCESSED after 30s** |
+| ~340 webhooks sent from the demo page | all accepted and processed |
+
+With the app and the database in the same region, the database part of a webhook takes a few milliseconds. On the free tier, large bursts are limited by the 0.1 CPU rather than by the database. The local measurements below show how each optimisation got here.
+
+### Results at a glance (development measurements)
 
 | Stage | Single webhook | Burst of 20 | Burst of 50 | Errors |
 |---|---|---|---|---|

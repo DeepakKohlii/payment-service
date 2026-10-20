@@ -49,7 +49,6 @@ class Worker:
         self._tasks: list[asyncio.Task] = []
 
     def notify(self) -> None:
-        """Called by the webhook so new jobs start immediately instead of waiting for the next poll."""
         self._wakeup.set()
 
     def start(self) -> None:
@@ -111,8 +110,6 @@ class Worker:
         self._completed.put_nowait(transaction_id)
 
     async def _complete_loop(self) -> None:
-        """Mark finished transactions PROCESSED, many per UPDATE. Transactions that finish
-        at the same moment (e.g. a burst received together) cost one round-trip, not one each."""
         while True:
             ids = [await self._completed.get()]
             while len(ids) < MAX_COMPLETE_BATCH and not self._completed.empty():

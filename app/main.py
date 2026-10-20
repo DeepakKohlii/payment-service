@@ -45,7 +45,8 @@ async def server_timing(request: Request, call_next):
     return response
 
 
-@app.api_route("/", methods=["GET", "HEAD"], response_model=HealthOut)
+@app.get("/", response_model=HealthOut)
+@app.head("/", include_in_schema=False) 
 async def health() -> HealthOut:
     return HealthOut(status="HEALTHY", current_time=to_iso_z(datetime.now(timezone.utc)))
 

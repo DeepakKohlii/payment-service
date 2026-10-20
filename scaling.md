@@ -15,9 +15,9 @@ The test sizes used elsewhere in this repo (20 in the demo's burst button, 50 in
 | Component | Current choice | Hard limit that matters |
 |---|---|---|
 | API + worker | **One** Python process (FastAPI/uvicorn), on Render's free tier | **0.1 CPU**, 512MB RAM, sleeps after 15 min idle, can't run multiple instances |
-| Database | Supabase free (Postgres), Seoul | **15 connections** via the session pooler; 500MB storage |
+| Database | Supabase free (Postgres), Singapore (measurements below were taken against the earlier Seoul project) | **15 connections** via the session pooler; 500MB storage |
 | Connections per instance | 4 for webhook writes + 3 for worker and status reads | 7 of the 15 |
-| Worker | Up to **100** transactions processed at once per instance (`WORKER_CONCURRENCY`) | each takes 30s |
+| Worker | Up to **5000** transactions processed at once per instance (`WORKER_CONCURRENCY`) | each takes 30s |
 
 ### Measured: receiving webhooks
 Measured from a local machine with the test client on the same machine, against Supabase in Seoul (~150ms per round-trip):
@@ -38,9 +38,9 @@ Measured from a local machine with the test client on the same machine, against 
 - **On Render's free tier (0.1 CPU), expect roughly a tenth of that.** That's an estimate to verify against the deployed URL.
 
 ### Measured: processing
-- **100 transactions in parallel per instance** (the `WORKER_CONCURRENCY` limit). Each one is a cheap async task that mostly waits, so this limit is a setting, not a hardware constraint.
-- **Sustained throughput ≈ 100 / 30s ≈ 3.3 transactions per second per instance.** For example, 1000 transactions arriving at once would finish in ~10 waves of 30s, so the last ones ~5 minutes later.
-- **The second limit is the "mark as processed" writes.** When 200 finished at the same moment, each needed its own database write through 3 connections, which spread completion over **30–39s** instead of 30s.
+- **Originally 100 transactions in parallel per instance**, which turned out to break the "~30 seconds" criterion: with a backlog over 100, a new transaction waited a full extra cycle (~60s). Completions were also one write each, so 200 finishing together were spread over 30–39s. Both are fixed (see [optimisation.md §2.1](optimisation.md#21-worker-limit-and-batched-completions)).
+- **Now: up to 5000 in parallel per instance, with batched completions.** Measured: **1000 transactions received at once were all processed in 30.2–30.3s**, and a single transaction sent during that backlog still took ~30s.
+- **Sustained throughput ≈ 5000 / 30s ≈ 160 transactions/second per instance** on the processing side. That's about the same as what one process can *receive* (~160/s), so the two sides are now balanced.
 - **Multiple instances already work.** By accident, two servers were connected to the same database during the 200 test. Each claimed about half the work, and none was processed twice (`SKIP LOCKED` + leases).
 
 ### Safe numbers for the demo deployment
@@ -48,15 +48,15 @@ Measured from a local machine with the test client on the same machine, against 
 | | Comfortable | Degrades | Why |
 |---|---|---|---|
 | Webhooks arriving at once | up to ~100 (local); fewer on 0.1 CPU | beyond that, responses slow down (queueing), but **none are lost** | CPU of one process |
-| Transactions processing in parallel | 100 | more simply wait their turn; processed after 60s, 90s… | `WORKER_CONCURRENCY` |
-| Sustained rate | ~3 transactions/second | backlog grows; everything is still processed eventually | 100 per 30s |
+| Transactions processing in parallel | up to 5000 | more simply wait their turn; processed after 60s, 90s… | `WORKER_CONCURRENCY` |
+| Sustained rate | limited by receiving (~160/s locally, less on 0.1 CPU) | backlog grows; everything is still processed eventually | CPU of one process |
 | Instances | 2 | a 3rd would exceed Supabase's 15 connections | free DB tier |
 
-**Quick wins without changing the architecture** (each is small):
-1. Raise `WORKER_CONCURRENCY` (e.g. 1000). Waiting tasks are cheap.
-2. Batch the "mark as processed" writes into one `UPDATE … WHERE transaction_id = ANY(…)`, as already done for inserts.
-3. Run several uvicorn worker processes per instance (`--workers N`) on a plan with more than 0.1 CPU.
-4. Deploy the API in the same region as the database (Seoul or Singapore).
+**Quick wins without changing the architecture:**
+1. ✅ *Done:* `WORKER_CONCURRENCY` raised to 5000.
+2. ✅ *Done:* "mark as processed" writes batched into one `UPDATE … WHERE transaction_id = ANY(…)`.
+3. ✅ *Done:* database and app in the same region (Singapore).
+4. Still open: run several uvicorn worker processes per instance (`--workers N`) on a plan with more than 0.1 CPU. This is the next ceiling, since receiving is CPU-bound.
 
 ---
 
@@ -150,8 +150,8 @@ At 10k/second, the challenge isn't any single request. It's that **300,000 trans
 
 | Step | Handles roughly | Changes |
 |---|---|---|
-| **Now** | a few transactions/second sustained; ~100 webhooks at once | — |
-| **1. Quick wins** | tens/second | higher `WORKER_CONCURRENCY`, batched completions, multiple processes, paid tiers with real CPU, co-located regions |
+| **Now** | up to ~160 transactions/second on one process (less on 0.1 CPU); ~100 webhooks at once comfortably | — |
+| **1. Quick wins** | hundreds/second | multiple processes per instance, paid tiers with real CPU *(higher `WORKER_CONCURRENCY`, batched completions and co-located regions are already done)* |
 | **2. Split services** | hundreds/second | API and workers deployed and scaled separately; PgBouncer/RDS Proxy; read replica for status; table partitioning |
 | **3. Real queue** | thousands/second | SQS or Kafka instead of Postgres-as-queue; Redis dedupe; dead-letter queue; autoscale workers on lag |
 | **4. Large scale** | **10k+/second** | log-first ingest (Kafka/Kinesis), sharded or NoSQL transaction store, push notifications instead of polling, multi-AZ, full observability, reconciliation |

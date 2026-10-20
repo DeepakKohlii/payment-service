@@ -12,8 +12,10 @@ class Settings(BaseSettings):
     # A claimed job is re-claimable after this lease expires (crash recovery).
     # Must be comfortably longer than processing_delay_seconds.
     job_lease_seconds: int = 120
-    # Max transactions processed concurrently per instance
-    worker_concurrency: int = 100
+    # Max transactions processed concurrently per instance. Each one is an async task that
+    # mostly waits, so this is cheap; it must exceed any realistic backlog, or transactions
+    # beyond it wait an extra full processing cycle (~60s instead of ~30s).
+    worker_concurrency: int = 5000
     # Supabase's session pooler caps clients at 15 on the free tier. Each instance uses
     # 4 + 3 = 7, leaving headroom for a second instance during Render's zero-downtime deploys.
     # Webhook ingestion gets its own pool so status reads and the worker can never delay a 202.

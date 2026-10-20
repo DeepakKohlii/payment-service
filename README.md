@@ -76,7 +76,7 @@ This gives at-least-once processing with no extra infrastructure. The final `UPD
 
 The brief requires the webhook to respond within 500ms "regardless of processing complexity". Keeping the 30s work off the request path was the obvious part. The less obvious part was that, against a real cloud database, **the response time is almost entirely database round-trips**. Every optimisation below came from measuring, finding where the time went, and removing round-trips.
 
-**Test setup:** the app running locally, the Supabase database in Seoul (`ap-northeast-2`), **one round-trip ≈ 150ms**. Bursts were sent as N concurrent requests with `httpx`. Numbers are end-to-end response times seen by the client. In production, deploy the app in the region closest to the database, which shortens every round-trip.
+**Test setup:** the app running locally, the Supabase database in Seoul (`ap-northeast-2`), **one round-trip ≈ 150ms**. (The database has since moved to Singapore, next to the Render deployment: ~79ms from a local machine, so the numbers below are pessimistic. See [optimisation.md §7](optimisation.md#7-database-moved-next-to-the-app-server).) Bursts were sent as N concurrent requests with `httpx`. Numbers are end-to-end response times seen by the client. In production, deploy the app in the region closest to the database, which shortens every round-trip.
 
 ### Results at a glance
 

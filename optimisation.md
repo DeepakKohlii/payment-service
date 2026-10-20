@@ -10,8 +10,9 @@ This file records every optimisation made in this project, in the order they wer
 4. [Measuring correctly](#4-measuring-correctly): browser queueing vs server time
 5. [Demo page](#5-demo-page)
 6. [Limits and what's next](#6-limits-and-whats-next)
+7. [Database moved next to the app server](#7-database-moved-next-to-the-app-server)
 
-**Test setup for all measurements:** app running on a local machine, Supabase Postgres in Seoul (`ap-northeast-2`), **one database round-trip ≈ 150ms**. Bursts are N concurrent requests sent with `httpx`. Deployed next to the database, every round-trip is shorter, so these numbers are a pessimistic case.
+**Test setup for sections 1–6:** app running on a local machine, Supabase Postgres in Seoul (`ap-northeast-2`), **one database round-trip ≈ 150ms**. Bursts are N concurrent requests sent with `httpx`. Deployed next to the database, every round-trip is shorter, so these numbers are a pessimistic case.
 
 ---
 
@@ -26,6 +27,9 @@ This file records every optimisation made in this project, in the order they wer
 | Burst of 20 while status polling + worker are busy | ~650ms–6.8s | **max ~330–420ms** |
 | Burst of 20 after 5+ min idle | slow (connections reopened) | **max 205ms** |
 | Crash mid-processing | (in-memory tasks would be lost) | **recovered and completed** |
+| Single transaction while a backlog of >100 is processing | **~60s** (waited for a free worker slot) | **~30s** |
+| 1000 transactions received at once | ~10 waves of 30s; completions spread over 30–39s | **all processed in 30.2–30.3s** |
+| Database round-trip (after moving to Singapore, see 7) | ~150ms | **~79ms** from a local machine; a few ms from Render Singapore |
 
 The single biggest lesson: **against a remote database, response time is almost entirely database round-trips.** CPU was never the bottleneck. Almost every optimisation below removes round-trips or takes them off the request path.
 
@@ -68,11 +72,27 @@ Not a float, so there's no rounding error on amounts. It's validated on input (`
 |---|---|
 | **Batch claiming with `FOR UPDATE SKIP LOCKED`** | One query claims up to N pending rows. Concurrent workers or instances skip rows already locked instead of waiting, so they never block each other or double-process. |
 | **Leases (`locked_until`)** instead of a permanent "in progress" flag | If a worker dies, its lease expires (120s) and the row becomes claimable again. That's crash recovery with no coordinator. |
-| **Concurrent processing** (up to 100 in flight per instance) | 20 transactions take ~30s total, not 20 × 30s. Each is an `asyncio` task, so waiting costs no threads. |
+| **Concurrent processing** (up to 5000 in flight per instance, see 2.1) | 20 transactions take ~30s total, not 20 × 30s. Each is an `asyncio` task, so waiting costs no threads. |
+| **Batched completions** (see 2.1) | Transactions that finish together are marked `PROCESSED` with one `UPDATE … WHERE transaction_id = ANY(…)`, not one write each. |
 | **Wake-up on new webhook** | The webhook handler signals the worker directly, so processing starts immediately instead of on the next poll. Polling (every 2s) is only a fallback. |
 | **Partial index on pending rows** (`WHERE status = 'PROCESSING'`) | The worker's "find pending jobs" query stays fast as processed rows pile up, because the index only contains rows still to be processed. |
 | **Idempotent completion** (`UPDATE ... WHERE status = 'PROCESSING'`) | Completing a transaction twice, after a lease expiry for example, is harmless. |
-| **Single-statement autocommit queries** | Claim and complete are each one statement, so there are no `BEGIN`/`COMMIT` round-trips (see 3.6). |
+| **Single-statement autocommit queries** | Claim and complete are each one statement, so there are no `BEGIN`/`COMMIT` round-trips (see 3.3). |
+
+### 2.1 Worker limit and batched completions
+**Symptom:** the smoke test's single transaction took **63s** instead of ~30s. That breaks the brief's first success criterion ("processed after ~30 seconds").
+**Cause:** 116 transactions had been sent just before it, and the worker processed at most **100 at a time** (`WORKER_CONCURRENCY`). The database showed exactly that: 100 finished at 30s+, the remaining 67 at 60s+. A reviewer who runs a load test and *then* a single-transaction test would hit this.
+**Second cause, found earlier with 200 at once:** every finished transaction needed its own `UPDATE`, through only 3 connections. When many finished at the same moment, the writes queued and completions spread over **30–39s**.
+**Fix:**
+- `WORKER_CONCURRENCY` default raised to **5000**. Each in-flight transaction is an async task that mostly sleeps, so this costs memory, not threads. The limit now has to exceed any realistic backlog rather than act as a throttle.
+- **Batched completions:** a finished transaction goes into an in-memory queue, and a completer marks everything that has finished with **one** `UPDATE … WHERE transaction_id = ANY(…) AND status = 'PROCESSING'`. As with ingest batching, there's no artificial delay; batches form from whatever finished while the previous write was in flight.
+- **Durability is unchanged:** if the process dies before the batch is written, those rows are still `PROCESSING` with a lease, and are re-claimed and completed after the lease expires.
+
+**Result:**
+- **1000 transactions received at once were all processed in 30.2–30.3s,** using 12 completion writes in total instead of 1000.
+- The smoke test's single transaction, sent while those 1000 were processing: **~30s**.
+- Webhooks sent while the 1000 were processing still answered in **max 255ms** (50 at once). That's the brief's "responds quickly even under processing load".
+- **Crash recovery re-tested** with batched completions: killed 3s into processing, re-claimed after the lease expired (`attempts = 2`), and completed. It happened to be finished by a *second* running instance, which again showed that multiple instances share work safely.
 
 ---
 
@@ -175,6 +195,21 @@ All of this was found by measuring against the real cloud database. On a local P
 | Server-reported timing | Shows what the API did, not the browser's queue |
 
 ---
+
+## 7. Database moved next to the app server
+**Problem:** Render (where the app runs) has no Seoul region. With the database in Seoul, every round-trip from a Render server would cross between countries, and every webhook costs at least one round-trip.
+**Fix:** a new Supabase project in **Singapore (`ap-southeast-1`)**, and the app deployed on **Render Singapore**, so both sit in the same region. (Supabase can't move an existing project; the app creates its table on first start, so switching was just a new connection string.) The new project was also created with **"Automatically expose new tables" turned off**, so the `transactions` table isn't reachable through Supabase's public Data API.
+
+**Measured from a local machine** (before deploying):
+
+| | Seoul | Singapore |
+|---|---|---|
+| Database round-trip | ~150ms | **~79ms** |
+| Single webhook | ~160ms | **~90ms** |
+| Burst of 20 | ~320–370ms | **~170–260ms** |
+| Burst of 50 | ~350–400ms | **~216–232ms** |
+
+From Render Singapore to Supabase Singapore, a round-trip should be a few milliseconds, so production numbers should be lower still. That's to be confirmed against the deployed URL.
 
 ## 6. Limits and what's next
 
